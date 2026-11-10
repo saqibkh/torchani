@@ -36,7 +36,39 @@ jobs:
   tests-ext:
     needs: [build-image-ext]
     runs-on: [self-hosted, ipickering]
+    permissions:
+      contents: read
     steps:
+      # Optional pre-check of GPU 3 (the one DOCKER_GPU gives the container).
+      # Pantheon needs nvcc on the host PATH, and the tests below run inside
+      # docker, so skip the check when the host has no CUDA toolkit. It never
+      # turns the job red for a missing compiler or a failed install; only a
+      # FAULT verdict (memory errors) fails the job.
+      - name: Look for nvcc on the host
+        id: nvcc
+        run: |
+          if ! command -v nvcc >/dev/null && [ -x /usr/local/cuda/bin/nvcc ]; then
+            echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
+          fi
+          if command -v nvcc >/dev/null || [ -x /usr/local/cuda/bin/nvcc ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::nvcc not found on the host, skipping the GPU health check"
+          fi
+      - name: GPU health check
+        id: gpu-health
+        if: steps.nvcc.outputs.found == 'true'
+        continue-on-error: true
+        uses: pantheongpu/gpu-health-check@1913a4746f390e2ae8849173c127954e154d9e5e # v0.1.1
+        with:
+          gpu: "3"
+          duration: 30
+          fail-on: never
+      - name: Fail on a faulty GPU
+        if: always() && steps.gpu-health.outputs.verdict == 'FAULT'
+        run: |
+          echo "::error::GPU 3 reported a FAULT, see the job summary"
+          exit 1
       - name: Test extensions on GPU (Quadro RTX 5000, SM75)
         run: docker run ${{ env.DOCKER_GPU }} ${{ env.EXT_TAG }} bash -c "nvidia-smi && pytest ./tests/test_cuaev.py ./tests/test_infer.py"
   tools:
