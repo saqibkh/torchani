@@ -1,0 +1,56 @@
+name: verify-health-check
+on:
+  push:
+    branches: [verify-health-check]
+jobs:
+  wiring-nvcc-missing:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Look for nvcc on the host
+        id: nvcc
+        run: |
+          if ! command -v nvcc >/dev/null && [ -x /usr/local/cuda/bin/nvcc ]; then
+            echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
+          fi
+          if command -v nvcc >/dev/null || [ -x /usr/local/cuda/bin/nvcc ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::nvcc not found on the host, skipping the GPU health check"
+          fi
+      - name: GPU health check
+        id: gpu-health
+        if: steps.nvcc.outputs.found == 'true'
+        continue-on-error: true
+        uses: pantheongpu/gpu-health-check@1913a4746f390e2ae8849173c127954e154d9e5e
+        with:
+          gpu: "3"
+          duration: 30
+          fail-on: never
+      - name: Fail on a faulty GPU
+        if: always() && steps.gpu-health.outputs.verdict == 'FAULT'
+        run: exit 1
+      - name: Assert skipped
+        run: test "${{ steps.gpu-health.outcome }}" = "skipped" && echo skipped-as-designed
+  wiring-mock:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: GPU health check (mock, same inputs apart from platform)
+        id: gpu-health
+        continue-on-error: true
+        uses: pantheongpu/gpu-health-check@1913a4746f390e2ae8849173c127954e154d9e5e
+        with:
+          platform: mock
+          gpu: "0"
+          duration: 5
+          fail-on: never
+      - name: Fail on a faulty GPU
+        if: always() && steps.gpu-health.outputs.verdict == 'FAULT'
+        run: exit 1
+      - name: Show outputs
+        if: always()
+        run: |
+          echo "outcome=${{ steps.gpu-health.outcome }} verdict=${{ steps.gpu-health.outputs.verdict }} platform=${{ steps.gpu-health.outputs.platform }}"
